@@ -1,0 +1,1 @@
+cmd_/home/uporabnik/POKS/vaja5/nal2.ko := ld -r -m elf_x86_64  -z max-page-size=0x200000 -z noexecstack   --build-id  -T ./scripts/module-common.lds -o /home/uporabnik/POKS/vaja5/nal2.ko /home/uporabnik/POKS/vaja5/nal2.o /home/uporabnik/POKS/vaja5/nal2.mod.o;  true
