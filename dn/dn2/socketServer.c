@@ -66,6 +66,7 @@ int main(int argc, char *argv[]) {
     int counter = 1;
     int uuid[8];
     char strUUID[46];
+    unsigned int last_sent_crc = 0;
 
     if (argc < 2) {
         fprintf(stderr, "ERROR, no port provided\n");
@@ -98,14 +99,26 @@ int main(int argc, char *argv[]) {
         if (strcmp(buf, "GET") == 0) {
             generateUUID(uuid);
             uuidStr(uuid, strUUID, counter);
-            unsigned int crc = compute_crc32(strUUID);
+            last_sent_crc = compute_crc32(strUUID);
             char response[64];
-            snprintf(response, sizeof(response), "%s %08X", strUUID, crc);
+            snprintf(response, sizeof(response), "%s %08X", strUUID, last_sent_crc);
             n = sendto(sock, response, strlen(response), 0, (struct sockaddr *)&from, fromlen);
             if (n < 0) error("sendto");
             printf("Sent: %s\n", response);
+        } else if (strncmp(buf, "PREJETO", 7) == 0) {
+            char received_crc[9];
+            sscanf(buf + 8, "%8s", received_crc);
+            unsigned int received_crc_int = strtoul(received_crc, NULL, 16);
 
-            counter++;
+            if (received_crc_int == last_sent_crc) {
+                counter++;
+                printf("CRC32 valid. Counter incremented.\n");
+            } else {
+                char error_msg[] = "NAPAKA 4900B4DB";
+                n = sendto(sock, error_msg, strlen(error_msg), 0, (struct sockaddr *)&from, fromlen);
+                if (n < 0) error("sendto");
+                printf("Sent: %s\n", error_msg);
+            }
         } else {
             char error_msg[] = "NEPREPOZNAVEN UKAZ";
             n = sendto(sock, error_msg, strlen(error_msg), 0, (struct sockaddr *)&from, fromlen);

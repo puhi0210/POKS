@@ -1,8 +1,5 @@
-/* Creates datagram UDP client in the internet domain. */
-/* IP address and port are passed as argument */
 #include <netdb.h>
 #include <netinet/in.h>
-#include <pthread.h>  // ZA NITI
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,68 +7,96 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-void poslji(void);
-void prejmi(void);
+unsigned int crc32_table[256];
+
+void init_crc32_table() {
+    unsigned int polynomial = 0xEDB88320;
+    for (int i = 0; i < 256; i++) {
+        unsigned int crc = i;
+        for (int j = 0; j < 8; j++) {
+            if (crc & 1)
+                crc = (crc >> 1) ^ polynomial;
+            else
+                crc >>= 1;
+        }
+        crc32_table[i] = crc;
+    }
+}
+
+unsigned int compute_crc32(const char *data) {
+    unsigned int crc = 0xFFFFFFFF;
+    while (*data) {
+        unsigned char byte = (unsigned char)(*data++);
+        crc = (crc >> 8) ^ crc32_table[(crc ^ byte) & 0xFF];
+    }
+    return crc ^ 0xFFFFFFFF;
+}
 
 void error(const char *msg) {
     perror(msg);
     exit(0);
 }
 
-struct hostent *hp;
-int sock, length, n;
-struct sockaddr_in server, from;
-socklen_t fromlen;
-
 int main(int argc, char *argv[]) {
-    pthread_t thread1, thread2;
+    int sock, n;
+    struct sockaddr_in server;
+    socklen_t serverlen;
+    char buf[1024], user_input[1024];
+    char uuid_with_crc[64], received_crc[9];
 
     if (argc != 3) {
-        printf("Usage: client IP port\n");
-        exit(1);
+        fprintf(stderr, "Usage: %s <hostname> <port>\n", argv[0]);
+        exit(0);
     }
+
+    init_crc32_table();
+
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) error("socket");
 
+    bzero(&server, sizeof(server));
     server.sin_family = AF_INET;
-    hp = gethostbyname(argv[1]);
-    if (hp == 0) error("Unknown host");
-    bcopy((char *)hp->h_addr, (char *)&server.sin_addr, hp->h_length);
     server.sin_port = htons(atoi(argv[2]));
-    length = sizeof(struct sockaddr_in);
+    serverlen = sizeof(server);
 
-    pthread_create(&thread1, NULL, (void *)poslji, NULL);
-    pthread_create(&thread2, NULL, (void *)prejmi, NULL);
-    pthread_join(thread1, NULL);
-    pthread_join(thread2, NULL);
+    struct hostent *hp = gethostbyname(argv[1]);
+    if (!hp) error("gethostbyname");
+    bcopy(hp->h_addr, &server.sin_addr, hp->h_length);
+
+    while (1) {
+        printf("Enter command: ");
+        bzero(user_input, 1024);
+        fgets(user_input, 1024, stdin);
+        user_input[strcspn(user_input, "\n")] = 0;  // Remove newline character
+
+        n = sendto(sock, user_input, strlen(user_input), 0, (struct sockaddr *)&server, serverlen);
+        if (n < 0) error("sendto");
+        printf("Sent: %s\n", user_input);
+
+        bzero(buf, 1024);
+        n = recvfrom(sock, buf, 1024, 0, (struct sockaddr *)&server, &serverlen);
+        if (n < 0) error("recvfrom");
+        printf("Received: %s\n", buf);
+
+        if (strncmp(user_input, "GET", 3) == 0) {
+            // Razčleni prejeto sporočilo
+            sscanf(buf, "%63s %8s", uuid_with_crc, received_crc);
+
+            // Izračunaj CRC za UUID brez CRC kode
+            unsigned int calculated_crc = compute_crc32(uuid_with_crc);
+
+            // Pošlji potrditev
+            char confirmation[64];
+            snprintf(confirmation, sizeof(confirmation), "PREJETO %08X", calculated_crc);
+            n = sendto(sock, confirmation, strlen(confirmation), 0, (struct sockaddr *)&server, serverlen);
+            if (n < 0) error("sendto");
+            printf("Sent confirmation: %s\n", confirmation);
+        } else if (strcmp(user_input, "X") == 0) {
+            printf("Exiting...\n");
+            break;
+        }
+    }
 
     close(sock);
     return 0;
-}
-
-void poslji(void) {
-    char buf[1024];
-    while (1) {
-        printf("Please enter the message: ");
-        bzero(buf, 1024);
-        fgets(buf, 1024, stdin);
-        printf("Send %s \n", buf);
-        n = sendto(sock, buf, 1024, 0, (const struct sockaddr *)&server, length);
-        if (n < 0) error("Sendto");
-        if (buf[0] == 'X') {
-            break;
-        }
-    }
-}
-
-void prejmi(void) {
-    char buf[1024];
-    while (1) {
-        n = recvfrom(sock, buf, 1024, 0, (struct sockaddr *)&server, &length);
-        if (n < 0) error("recvfrom");
-        printf("Received a datagram:%s\n ", buf);
-        if (buf[0] == 'X') {
-            break;
-        }
-    }
 }
